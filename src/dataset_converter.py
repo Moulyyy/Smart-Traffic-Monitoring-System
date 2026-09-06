@@ -4,8 +4,9 @@ import shutil
 from pathlib import Path
 
 # Define paths
-base_dir = "C:\\Users\\ASUS\\Downloads\\vrag-project-1-export"
-output_dir = f"{base_dir}/yolo_dataset"
+ROOT_DIR = Path(__file__).resolve().parent.parent
+data_dir = ROOT_DIR / "data"
+output_dir = ROOT_DIR / "data" / "yolo_dataset"
 
 splits = ['training', 'testing']
 
@@ -27,8 +28,8 @@ def convert_to_yolo(bbox, img_w, img_h):
 
 # Process both splits
 for split in splits:
-    label_file = os.path.join(base_dir, split, "bounding_boxes.labels")
-    image_dir = os.path.join(base_dir, split)
+    label_file = os.path.join(data_dir, split, "bounding_boxes.labels")
+    image_dir = os.path.join(data_dir, split)
     output_split = 'train' if split == 'training' else 'val'
 
     with open(label_file, 'r') as f:

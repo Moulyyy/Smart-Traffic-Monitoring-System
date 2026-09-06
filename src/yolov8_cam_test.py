@@ -1,8 +1,15 @@
+import os
+from pathlib import Path
 import cv2
 from ultralytics import YOLO
 
-# Load YOLOv8 model (you can use yolov8n.pt, yolov8s.pt, or your custom model)
-model = YOLO('best___.pt')  # Replace with your .pt path
+# Resolve project root and model path
+ROOT_DIR = Path(__file__).resolve().parent.parent
+DEFAULT_MODEL_PATH = ROOT_DIR / "models" / "best.pt"
+
+# Load YOLOv8 model
+model_path = os.getenv("YOLO_MODEL_PATH", str(DEFAULT_MODEL_PATH))
+model = YOLO(model_path)
 
 # Open USB camera
 cap = cv2.VideoCapture(0)  # Use the correct camera index (0 is usually the default)

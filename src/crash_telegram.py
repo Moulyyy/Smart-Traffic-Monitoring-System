@@ -1,14 +1,23 @@
+import os
+from pathlib import Path
 import cv2
 import numpy as np
 from ultralytics import YOLO
 import uuid
 import requests
 
-# Telegram config
-BOT_TOKEN = '7709578331:AAGFslWozdLHcVXT5hphT27SpOis0w_Emvw'
-CHAT_ID = '1855281040'
+# Resolve project paths
+ROOT_DIR = Path(__file__).resolve().parent.parent
+DEFAULT_MODEL_PATH = ROOT_DIR / "models" / "best.pt"
+
+# Telegram config (can be set via environment variables or .env)
+BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '7709578331:AAGFslWozdLHcVXT5hphT27SpOis0w_Emvw')
+CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '1855281040')
 
 def send_telegram_message(message):
+    if not BOT_TOKEN or not CHAT_ID:
+        print("Telegram Warning: Bot token or chat ID not configured.")
+        return
     url = f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage'
     data = {'chat_id': CHAT_ID, 'text': message}
     try:
@@ -19,7 +28,8 @@ def send_telegram_message(message):
         print(f"Exception in Telegram Notification: {e}")
 
 # Load YOLOv8 model
-model = YOLO('best.pt')
+model_path = os.getenv("YOLO_MODEL_PATH", str(DEFAULT_MODEL_PATH))
+model = YOLO(model_path)
 
 # Initialize video capture
 cap = cv2.VideoCapture(0)
@@ -29,10 +39,8 @@ if not cap.isOpened():
 
 print("Press 'q' to quit.")
 
-# State tracking
+# Crash log to avoid multiple notifications
 crash_log = set()
-prev_car_count = -1
-prev_crash_state = None  # "crash" or "no_crash"
 
 def iou(boxA, boxB):
     xA = max(boxA[0], boxB[0])
@@ -51,68 +59,49 @@ while True:
     if not ret:
         break
 
-    results = model(frame)[0]  # forward inference
+    results = model.predict(source=frame, save=False, conf=0.3)
+    detections = results[0].boxes
+
     current_boxes = {}
     frame_copy = frame.copy()
     car_count = 0
-    crash_happened = False
 
-    if results and results.boxes is not None:
-        for i in range(len(results.boxes)):
-            box = results.boxes[i]
-            cls_id = int(box.cls.item())
-            if cls_id != 0:  # Assuming class 0 = car
-                continue
+    for i, box in enumerate(detections):
+        cls = int(box.cls[0])
+        if cls != 0:  # Assuming class 0 is 'car'
+            continue
 
-            x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-            box_id = str(uuid.uuid4())
-            current_boxes[box_id] = (x1, y1, x2, y2)
-            car_count += 1
+        xyxy = box.xyxy[0].cpu().numpy().astype(int)
+        x1, y1, x2, y2 = xyxy
+        box_id = str(uuid.uuid4())
+        current_boxes[box_id] = (x1, y1, x2, y2)
+        car_count += 1
+        cv2.rectangle(frame_copy, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
-            # Draw bounding box
-            cv2.rectangle(frame_copy, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(frame_copy, f"Car", (x1, y1 - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-
-    # Crash detection
+    # Crash Detection
     ids = list(current_boxes.keys())
+    new_crash_detected = False
     for i in range(len(ids)):
         for j in range(i + 1, len(ids)):
             id1, id2 = ids[i], ids[j]
             box1, box2 = current_boxes[id1], current_boxes[id2]
 
             if iou(box1, box2) > 0.3:
-                crash_happened = True
                 key = tuple(sorted([id1, id2]))
                 if key not in crash_log:
                     crash_log.add(key)
                     print("🚨 Crash Detected!")
+                    new_crash_detected = True
                     cx = int((box1[0] + box1[2]) / 2)
                     cy = int((box1[1] + box1[3]) / 2)
                     cv2.putText(frame_copy, "CRASH", (cx - 20, cy - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 3)
                     cv2.circle(frame_copy, (cx, cy), 20, (0, 0, 255), 5)
 
-    # 📨 Telegram Notifications
-    send_message = False
-    message = ""
-
-    if car_count != prev_car_count:
-        send_message = True
-        message += f"🚗 Cars Detected: {car_count}\n"
-        prev_car_count = car_count
-
-    if crash_happened and prev_crash_state != "crash":
-        send_message = True
-        message += "🚨 Crash Detected!"
-        prev_crash_state = "crash"
-    elif not crash_happened and prev_crash_state != "no_crash":
-        send_message = True
-        message += "✅ No crash detected."
-        prev_crash_state = "no_crash"
-
-    if send_message and message.strip():
-        send_telegram_message(message.strip())
+    # Send Telegram only for new crashes
+    if new_crash_detected:
+        msg = f"🚨 Crash detected!\nTotal Cars Detected: {car_count}"
+        send_telegram_message(msg)
 
     cv2.imshow("Crash Detection", frame_copy)
     if cv2.waitKey(1) & 0xFF == ord('q'):
